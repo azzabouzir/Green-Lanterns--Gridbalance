@@ -88,7 +88,7 @@ Le bouton Reload example (page de connexion) recharge cet exemple.
 
 Tout est simulé et construit au démarrage :
 
-- 6 BCC (CRC Nord : Grombalia, Tunis ; CRC Sud : Gafsa, Sfax, Sousse, Gabès), 24 villes fictives (4 par BCC) ;
+- BCC (CRC Nord : Grombalia, Tunis ; CRC Sud : Gafsa, Sfax, Sousse, Gabès ...), 24 villes fictives (4 par BCC) ;
 - situation nationale : demande 4 500 MW, production 4 200 MW, déficit 300 MW ;
 - 8 entrées au registre des infrastructures critiques (7 protégées) ;
 - 3 usines flexibles + stockage 25 MW + autres alternatives 15 MW ;
