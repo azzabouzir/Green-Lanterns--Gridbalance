@@ -1,140 +1,57 @@
-Intelligent & Fair Load Shedding Platform— version 1 (prototype fonctionnel)
+# GRIDBALANCE (Team Green Lanterns, PESTGM 7.0, Track 2)
 
-Plateforme d'aide à la décision pour le délestage électrique en Tunisie. Elle relie, dans une seule application cliquable, le Dispatching National (DN), les CRC (Nord et Sud), les BCC, les industriels et les citoyens.
+Decision-support platform for manual rotating load shedding on Tunisia's grid. **The operator decides**: the platform allocates, tracks, alarms and logs. It does not control the grid, and STEG integration is simulated here (target of a pilot).
 
-> À retenir
-> - Le livrable est un seul fichier : `gridbalance.html` (≈ 57 Ko). Il s'exécute dans un navigateur, sans installation, sans serveur, sans connexion Internet.
-> - Toutes les données (BCC, villes, puissances, historiques, coupures) sont simulées. Ce ne sont pas des données opérationnelles réelles de la STEG.
-> - L'« IA » est un moteur de règles et d'optimisation déterministe. Elle propose ; l'opérateur décide. Aucune coupure n'est jamais déclenchée automatiquement.
+```
+RTU / SCADA simulator ─ telemetry + commands (API key) ─▶ API (Node 22) ─▶ SQLite
+                                                          REST + WebSocket · role-based tokens · alarm engine
+                                                          ▼
+                       Web client: DN · CRC · BCC · Admin · Citizen · Industrial      public/prototype.html = offline v1 demo
+```
 
----
+## Rules implemented
+- **Official STEG manual load-shedding keys** (from the "Délestage manuel" document): the national deficit is split North 65% / South 35% (the tables; the text says 2/3 – 1/3), then across BCCs. **Tunis is spared until 200 MW** are shed nationally; the part above 200 MW uses a second set of keys that includes Tunis. `npm test` checks all six reference rows (120 to 500 MW) against the document's tables, plus the traceability, protection, audit and learning checks.
+- Industrial flexibility is deducted first. Fairness (history-based index) chooses the feeders inside each BCC. Critical feeders are never cut.
+- Feeder timers start on the breaker-open telemetry: warning at 24 min, alarm at 30 min, rotation proposal. Σ BCC = CRC is enforced. Stale telemetry blocks commands. Everything is audited.
 
+## Run on your PC
+Requires **Node.js 22.13 or newer** (`node -v`). Without Node, use Docker.
+```bash
+npm install
+npm start            # terminal 1: API + web client on http://localhost:3000
+npm run sim          # terminal 2: SCADA/RTU simulator
+```
+Faster demo (1 real second = 20 simulated minutes): macOS/Linux `SPEED=20 npm start`; PowerShell `$env:SPEED=20; npm start`; cmd `set SPEED=20 && npm start`.
+Docker: `docker compose up --build`.
+Accounts (password `demo`): `dn`, `crc_north`, `crc_south`, `bcc_tunis`, `bcc_grombalia`, `bcc_sousse`, `bcc_beja`, `bcc_gafsa`, `bcc_sfax`, `bcc_gabes`, `admin`, `ind_a`, `ind_b`, `ind_c`, `cit_sami`, `cit_amel`.
+Set `SECRET`, `SCADA_KEY`, `DEMO_PASSWORD` outside demos.
 
-`gridbalance.html` contient tout, en un seul fichier texte :
+## Language
+The web client has an **EN / FR** switch (bottom-right corner). It remembers your choice and defaults to your browser language. Screens, buttons, audit-trail events and error messages are translated; the API and the stored data stay in English. `public/prototype.html` (offline v1) is English only.
 
-| Partie | Taille | Rôle |
-|---|---|---|
-| HTML | quelques lignes | Structure : menu latéral, en-tête, zone de contenu, fenêtre modale |
-| CSS | ≈ 3,6 Ko | Styles, thème clair/sombre, mise en page adaptative |
-| JavaScript | ≈ 52 Ko | Données, moteur de décision, 17 vues, 31 fonctions |
+## Decision assistant (DN)
+The DN screen starts with a guided card: (1) **situation**: demand, generation, interconnections and a unit outage preset give the deficit now, in 30 min and the J-1 peak (simulated data; every change is audited); (2) **flexibility**: request all available industrial sites in one click; (3) **three scenarios** (A official keys without flexibility, B official keys + accepted flexibility, C fairness-weighted + flexibility), each showing conventional MW, flexibility used, North/South and per-BCC MW, people affected (estimate), fairness of impact and feasibility against each BCC's sheddable capacity. One scenario is **recommended with a "Why?"** and can be approved in one click. The manual form remains available. The previewed scenario is exactly what gets created (tested).
 
-Aucune bibliothèque externe, aucun appel réseau, aucun stockage navigateur. L'état vit en mémoire : recharger la page le remet à zéro.
+## Accountability, protected sites, learning
+- **Who set, acknowledged, accepted, executed:** every order follows a chain with named actors. `dn` creates it, the CRC **acknowledges** its region, each BCC **accepts** (or refuses with a reason) and only then **executes**; the API refuses a skipped step (409). Restoration and completion are recorded too. `GET /api/history` lists each order with all of this, and the web client shows the chain and the history.
+- **Tamper-evident audit trail:** every event is hash-chained (SHA-256 of the previous record). `GET /api/audit/verify` detects any edit of a past record, shown as an integrity badge in the client.
+- **Protected sites registry:** hospitals, police, civil protection, water stations and similar sites are registered on feeders by an admin. A feeder with a protected site is never planned, rotated or cut manually (403 with the site names). Removing a protection needs an admin and a written reason, and is logged.
+- **Learning from history:** after each outage the platform updates (1) the fairness history, (2) the learned real load of each feeder (moving average), (3) a per-BCC correction factor from past planned-vs-delivered MW. These are explainable adaptive statistics, not a neural network; trained forecasting models are a pilot-phase step.
 
+## Demo flow (about 2 minutes)
+1. `dn`: request flexibility from `ind_a`, `ind_b`. Switch to `ind_a` and accept; `ind_b` sends a proposal; `dn` accepts it.
+2. `dn`: pick a generation-outage preset (e.g. CO. CC, 280 MW) and create the order. The split follows the official keys.
+3. `crc_north`: adjust shares (Σ BCC must equal the CRC amount, otherwise 409).
+4. `bcc_sousse`: Execute. Citizens get an alert first, then the RTU opens breakers and feeder timers start.
+5. Advance with `SPEED=20`: the 24 min warning and the 30 min alarm appear, then Rotate.
+6. `cit_sami`: alert, status, "why", history. `admin`: cut the SCADA link, telemetry goes STALE.
+7. `dn`: Order restoration. The fairness index and KPIs update. `GET /api/report` exports the audit log.
 
+## API
+`POST /api/login` · `GET /api/state` · `GET|POST /api/situation`, `POST /api/scenarios`, `POST /api/orders` (DN) · `POST /api/alloc` (CRC) · `POST /api/execute`, `/api/rotate`, `/api/command` (BCC) · `POST /api/accept` (CRC, BCC) · `POST /api/close` (DN) · `GET /api/history`, `GET /api/audit/verify` · `POST /api/sites`, `/api/sites/remove` (ADMIN) · `POST /api/flex/request|decide` (DN), `/api/flex/respond` (IND) · `GET /api/citizen`, `/api/industrial` · `POST /api/link` (ADMIN) · `GET /api/report` · `GET /api/scada/commands`, `POST /api/scada/telemetry` (API key).
 
-- Un navigateur récent : Chrome, Edge, Firefox ou Safari (JavaScript activé).
-- Un écran d'ordinateur, de tablette ou de téléphone (l'affichage s'adapte ; l'ordinateur est plus confortable).
+## Layout
+`server.js` API and rules · `scada-sim.js` RTU simulator · `public/index.html` web client · `public/prototype.html` offline v1 demo (simplified allocation, kept for reference) · `tests/allocation.mjs` · `.github/workflows/ci.yml`
 
-Rien d'autre : pas de Node.js, pas de Python, pas de base de données.
-
-
-
-1. Enregistrez `gridbalance.html` sur votre ordinateur.
-2. Double-cliquez  dessus (ou faites-le glisser dans une fenêtre du navigateur).
-3. La page de connexion s'affiche.
-
-Option (facultative) — serveur local, si votre navigateur bloque l'ouverture de fichiers :
-
-
-
-
-
-La connexion est simulée : on choisit un profil, sans mot de passe. Chaque profil ne voit que ses propres pages.
-
-| Profil | À choisir sur la page de connexion | Pages disponibles |
-|---|---|---|
-| STEG Administrator | — | National Overview, Supervision, CRCs, BCCs & Cities, Scenarios, Industrial Flexibility, Citizens & Alerts, Fairness & History, Event Log |
-| National Dispatching (DN) | — | National Overview, AI & Scenarios, Supervision, Industrial Flexibility, Fairness & History, Event Log |
-| CRC | CRC North ou CRC South | CRC Dashboard, Event Log |
-| BCC | un des 6 BCC : Grombalia, Tunis, Gafsa, Sfax, Sousse, Gabès | All BCCs, Load Shedding, Outage History |
-| Citizen| un compte existant Sami B. de Sousse, Amel K. de Sfax) ou Sign up | My Electricity, My Alerts |
-| Industrial consumer| Factory A, B ou C | My Flexibility |
-
-Boutons de l'en-tête : ← Back(page précédente, puis retour à la connexion), Log out, Theme (clair / sombre).
-
-Inscription citoyen (Sign up): nom, téléphone, gouvernorat, ville (liste, ou saisie libre si votre ville est absente : elle est alors ajoutée automatiquement sous son gouvernorat) et canal d'alerte (App, SMS ou App + SMS).
-
-
-
-Au chargement, un cas de délestage est déjà en cours pour que toutes les pages soient parlantes :
-
-- le DN a approuvé le scénario « Flexibility + Rotation » pour 300 MW ;
-- les deux CRC ont réparti leur part entre leurs BCC (CRC Nord 89 MW, CRC Sud 165 MW, plus la flexibilité) ;
-- la plupart des BCC exécutent ; Sousse a confirmé (alerte envoyée) ; Gafsa attend sa confirmation ;
-- Factory A est disponible, Factory B a une demande à traiter, Factory C a envoyé une proposition au DN ;
-- le tableau de bord du DN affiche : requis 300 MW, réel 239 MW, écart 61 MW, 24 départs ouverts, 4 BCC actifs, énergie non fournie 1 919 MWh.
-
-Le bouton Reload example (page de connexion) recharge cet exemple.
-
-
-1. DN → *AI & Scenarios* → Analyze & generate : trois scénarios apparaissent ; ouvrez Why this scenario ; cliquez Approve & send to CRCs
-2. CRC South → l'instruction du DN est là ; l'IA propose une répartition entre les BCC (le total doit égaler l'ordre) → Approve & send to BCCs
-3. BCC Gafsa → Load Shedding : déficit et montant à remplacer, villes proposées par l'IA, vérifications → Confirm load shedding
-4. Cliquez Advance execution : Scheduled → Alert sent → In progress → Restored*.
-5. Citizen  → alerte, statut et explication « Pourquoi ? » ; Industrial (*Factory B*) → Accept ou Decline ou envoyez une proposition ; DN → Industrial Flexibility → validez la proposition.
-6. DN ou Administrateur → tableau de bord, Fairness & History et journal se mettent à jour.
-
-> Approuver un nouveau scénario (étape 1) remplace l'exemple en cours : les BCC repartent de zéro et suivent votre parcours. Reload example rétablit l'exemple initial.
-
-
--Score d'équité d'une ville : plus il est élevé, plus sa charge récente est légère. Il combine minutes cumulées, fréquence, coupures récentes, priorité et consommateurs.
-- Répartition proportionnelle à un poids, avec un plafond de capacité par candidat ; les sites critiques protégés sont retirés de la capacité et une ville protégée n'est jamais coupée.
-- Trois scénarios au niveau des CRC : *Traditional Rotation Balanced Rotation Flexibility + Rotation (« éviter avant de couper » : la flexibilité passe avant la coupure conventionnelle).
-- Qualité des données : *Good* (< 10 min), Delayed (< 30 min), Stale (≥ 30 min). Si un BCC est Stale, aucune recommandation n'est émise et la confirmation est bloquée.
-- Rotation au BCC : deux fenêtres de 40 minutes, l'ordre des villes alterne.
-- Alertes citoyens : environ 15 minutes avant chaque coupure planifiée.
-
-
-
-Tout est simulé et construit au démarrage :
-
-- BCC (CRC Nord : Grombalia, Tunis ; CRC Sud : Gafsa, Sfax, Sousse, Gabès ...), 24 villes fictives (4 par BCC) ;
-- situation nationale : demande 4 500 MW, production 4 200 MW, déficit 300 MW ;
-- 8 entrées au registre des infrastructures critiques (7 protégées) ;
-- 3 usines flexibles + stockage 25 MW + autres alternatives 15 MW ;
-- environ 12 000 citoyens inscrits, comptés par ville(jamais une ligne par citoyen).
-
-
-
-- Reload example sur la page de connexion, ou recharger la page (F5) : tout revient à l'état de départ.
-
-
-
-| Problème | Solution |
-|---|---|
-| Page blanche | Vérifiez que JavaScript est activé et utilisez un navigateur récent. |
-| Le fichier s'ouvre comme du texte | Ouvrez-le avec le navigateur (clic droit → *Ouvrir avec*), pas dans un éditeur. |
-| Ouvert depuis une messagerie / un aperçu | Enregistrez d'abord le fichier sur l'ordinateur, puis ouvrez-le. |
-| Affichage trop sombre ou trop clair | Bouton Theme en haut à droite. |
-| Une action n'a « rien fait » | Certaines actions sont refusées volontairement (ex. confirmer avec un BCC en données Stale, retirer une ville avec une coupure en cours) : un message explique pourquoi. |
-| Mes modifications ont disparu | Normal : rien n'est enregistré ; recharger la page réinitialise l'état. |
-
-
-
-L'application fonctionne hors ligne : aucune donnée saisie (noms, téléphones, villes) n'est envoyée ni stockée ailleurs que dans la mémoire de l'onglet, et disparaît à la fermeture.
-
-## 12. Limites connues
-
-- Pas de serveur, de base de données ni d'authentification réelle ; pas d'utilisateurs simultanés.
-- Prévisions de demande (courbes) fixes et illustratives ; carte de la Tunisie schématique (sans valeur cartographique).
-- Le moteur est heuristique : pas de prévision de charge, pas d'optimisation mathématique globale, pas de modèle du réseau électrique.
-- Les alertes sont simulées à l'écran : aucun SMS ni notification réelle.
-
-
-Le fichier est du texte : ouvrez-le dans un éditeur pour l'adapter.
-
-| Où | Quoi |
-|---|---|
-| `BCCS`, `POP`, `DM`, `PR`, `NC` | BCC, CRC, gouvernorats, populations, demandes, priorités, nombre de coupures |
-| `WT` | Poids du score d'équité |
-| `init()` | Construction de toutes les données (à remplacer par des appels API pour des données réelles) |
-| `seed()` | L'exemple chargé au démarrage |
-| `alloc()`, `gen()`, `propose()`, `plan()` | Répartition proportionnelle, scénarios du DN, répartition CRC → BCC, rotation au BCC |
-| `V.xxx` | Une fonction par page ; `render()` affiche la page selon le profil |
-
-
-Le comportement a été contrôlé par un test de fumée automatisé (rendu de toutes les pages des six profils, inscription avec une ville absente, parcours complet DN → CRC → BCC jusqu'à la clôture, comptage de 100 000 citoyens, ajout / retrait de villes par l'administrateur) et par une navigation réelle sur 14 écrans dans Chromium, sans erreur JavaScript.
-
----
-
-*Prototype de démonstration — voir aussi le rapport de projet `Rapport_GRIDBALANCE.docx` (9 pages).*
+## Known limits
+Simulated RTU (no real OPC/ICCP), demo authentication (no TLS or rate limiting), single SQLite node without backup, SMS/push not actually sent, the 3-scenario AI generator exists only in `public/prototype.html`. All data is simulated. No STEG commitment to deploy or purchase is claimed.
